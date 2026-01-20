@@ -6,6 +6,7 @@
   import { onMount } from "svelte";
   import { scaleLinear } from "d3-scale";
   import { interpolateViridis } from "d3-scale-chromatic";
+  import { base } from '$app/paths';
 
   let map;
   let geojsonLayer;
@@ -128,7 +129,7 @@
     }).addTo(map);
 
     // Load GeoJSON as text to avoid encoding issues
-    const geojsonText = await fetch("/municipalities.geojson").then(r => r.text());
+    const geojsonText = await fetch(`${base}/municipalities.geojson`).then(r => r.text());
     geojsonData = JSON.parse(geojsonText);
 
     // normalize names
