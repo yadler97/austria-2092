@@ -1,7 +1,7 @@
 <script>
   import { onMount } from "svelte";
   import { scaleLinear } from "d3-scale";
-  import { interpolateViridis } from "d3-scale-chromatic";
+  import { interpolateViridis, interpolateRdBu } from "d3-scale-chromatic";
   import { base } from '$app/paths';
 
   let map;
@@ -11,6 +11,7 @@
   let selectedBundesland = "All";
   let searchQuery = "";
   let searchResults = [];
+  let selectedGemeindeFeature = null;
 
   const bundeslandMap = {
     "1": "Burgenland",
@@ -31,19 +32,30 @@
   function updateStyle(metric) {
     if (!geojsonData || !geojsonLayer) return;
 
+    // Filter features based on selected Bundesland
     const filteredFeatures = geojsonData.features.filter(f => {
       const gId = f.properties?.g_id?.toString();
       const bl = gId ? bundeslandMap[gId[0]] : null;
       return selectedBundesland === "All" || bl === selectedBundesland;
     });
 
-    if (filteredFeatures.length > 0) {
+    // Zoom to selection
+    if (selectedGemeindeFeature) {
+      // Keep zoom on selected Gemeinde
+      const layer = geojsonLayer.getLayers().find(l => l.feature === selectedGemeindeFeature);
+      if (layer) {
+        const bounds = layer.getBounds ? layer.getBounds() : layer.getLatLng().toBounds(1000);
+        map.fitBounds(bounds, { padding: [20, 20] });
+      }
+    } else if (filteredFeatures.length > 0) {
+      // Default zoom to Bundesland or all features
       const bounds = L.geoJSON(filteredFeatures).getBounds();
       map.fitBounds(bounds, { padding: [20, 20] });
     } else {
       map.setView([47.5, 14.5], 7);
     }
 
+    // Get values
     const values = filteredFeatures
       .map(f => f.properties[metric])
       .filter(v => v !== null && v !== undefined);
@@ -51,39 +63,79 @@
     const minVal = Math.min(...values);
     const maxVal = Math.max(...values);
 
-    const colorScale = scaleLinear()
-      .domain([minVal, maxVal])
-      .range([0, 1]);
+    // Create color scale
+    let colorScale;
+    if (metric === "population_change_per_1000") {
+      // diverging + log scale
+      const posMax = Math.max(maxVal, 0);
+      const negMin = Math.min(minVal, 0);
 
+      colorScale = val => {
+        if (val === 0) return 0.5; // middle
+        if (val > 0) {
+          return 0.5 + 0.5 * Math.log1p(val) / Math.log1p(posMax); // 0.5..1
+        } else {
+          return 0.5 - 0.5 * Math.log1p(-val) / Math.log1p(-negMin); // 0..0.5
+        }
+      };
+    } else {
+      // sequential for avg_age
+      colorScale = scaleLinear().domain([minVal, maxVal]).range([0, 1]);
+    }
+
+    // Apply styles
     geojsonLayer.setStyle(f => {
+      const val = f.properties[metric];
+      const t = Math.max(0, Math.min(1, colorScale(val))); // clamp to [0,1]
+      const fillColor =
+        metric === "population_change_per_1000"
+          ? interpolateRdBu(1 - t) // red=negative, blue=positive
+          : interpolateViridis(t);
+
       const isVisible = filteredFeatures.includes(f);
+
       return {
-        fillColor: isVisible ? interpolateViridis(colorScale(f.properties[metric])) : "#ccc",
+        fillColor: isVisible ? fillColor : "#ccc",
         weight: 1,
         color: "white",
         dashArray: "2",
-        fillOpacity: isVisible ? 0.8 : 0
+        fillOpacity: isVisible ? 0.8 : 0.2
       };
     });
 
+    // Update legend
     const legendDiv = document.querySelector(".legend");
     if (legendDiv) {
       legendDiv.innerHTML = `<b>${metric === "avg_age" ? "Average Age" : "Population Change 2025"}</b><br>`;
       const gradient = document.createElement("div");
       gradient.style.height = "12px";
       gradient.style.width = "100px";
-      gradient.style.background = `linear-gradient(to right, ${interpolateViridis(0)}, ${interpolateViridis(1)})`;
       gradient.style.margin = "5px 0";
+
+      if (metric === "population_change_per_1000") {
+        gradient.style.background = `linear-gradient(to right, ${interpolateRdBu(0)}, ${interpolateRdBu(0.5)}, ${interpolateRdBu(1)})`;
+      } else {
+        gradient.style.background = `linear-gradient(to right, ${interpolateViridis(0)}, ${interpolateViridis(1)})`;
+      }
+
       legendDiv.appendChild(gradient);
       legendDiv.innerHTML += `${minVal.toFixed(0)} &nbsp;&nbsp;&nbsp;&nbsp; ${maxVal.toFixed(0)}`;
     }
 
+    // Update tooltips
     geojsonLayer.eachLayer(layer => {
       const f = layer.feature;
+      const val = f.properties[metric];
       const isActive = filteredFeatures.includes(f);
 
+      const t = Math.max(0, Math.min(1, colorScale(val)));
+      const fillColor =
+        metric === "population_change_per_1000"
+          ? interpolateRdBu(1 - t)
+          : interpolateViridis(t);
+
       layer.setStyle({
-        fillColor: isActive ? interpolateViridis(colorScale(f.properties[metric])) : "#ccc",
+        fillColor: isActive ? fillColor : "#ccc",
         weight: 1,
         color: "white",
         dashArray: "2",
@@ -91,11 +143,12 @@
       });
 
       if (isActive) {
-        const val = f.properties[metric];
-        const formatted = val !== null && val !== undefined
-          ? Number.isInteger(val) ? val.toLocaleString() : val.toFixed(1)
-          : "n/a";
-
+        const formatted =
+          val !== null && val !== undefined
+            ? Number.isInteger(val)
+              ? val.toLocaleString()
+              : val.toFixed(1)
+            : "n/a";
         layer.bindTooltip(`<b>${decodeUTF8(f.properties.g_name)}</b><br>${metric}: ${formatted}`);
       } else {
         layer.unbindTooltip();
@@ -129,6 +182,7 @@
   function selectGemeinde(f) {
     searchQuery = f.properties.name;
     searchResults = [];
+    selectedGemeindeFeature = f; // store it
 
     const layer = geojsonLayer.getLayers().find(l => l.feature === f);
     if (layer) {
@@ -178,6 +232,7 @@
   }
 
   function selectBundesland(b) {
+    selectedGemeindeFeature = null; // clear selected Gemeinde
     selectedBundesland = b;
     updateStyle(currentMetric);
   }
