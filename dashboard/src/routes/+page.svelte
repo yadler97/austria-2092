@@ -2,6 +2,8 @@
   import { onMount } from "svelte";
   import { scaleLinear } from "d3-scale";
   import { interpolateViridis, interpolateRdBu } from "d3-scale-chromatic";
+  import { select } from "d3-selection";
+  import { axisBottom, axisLeft } from "d3-axis";
   import { base } from '$app/paths';
 
   let map;
@@ -24,6 +26,13 @@
     "8": "Vorarlberg",
     "9": "Wien"
   };
+
+  // Scatter plot size
+  const width = 400;
+  const height = 400;
+  const margin = { top: 20, right: 20, bottom: 40, left: 50 };
+
+  let xScale, yScale;
 
   function decodeUTF8(str) {
     return decodeURIComponent(escape(str));
@@ -192,6 +201,76 @@
     }
   }
 
+  // Scatterplot
+  function drawScatter() {
+    if (!geojsonData) return;
+
+    const svg = select("#scatterplot");
+    svg.selectAll("*").remove(); // clear previous
+
+    // Filter features based on selected Bundesland
+    const filteredFeatures = geojsonData.features.filter(f => {
+      const gId = f.properties?.id?.toString();
+      const bl = gId ? bundeslandMap[gId[0]] : null;
+      return selectedBundesland === "All" || bl === selectedBundesland;
+    });
+
+    if (filteredFeatures.length === 0) return;
+
+    const xValues = filteredFeatures.map(f => f.properties.avg_age);
+    const yValues = filteredFeatures.map(f => f.properties.population_change_per_1000);
+
+    xScale = scaleLinear()
+      .domain([Math.min(...xValues), Math.max(...xValues)])
+      .range([margin.left, width - margin.right]);
+
+    yScale = scaleLinear()
+      .domain([Math.min(...yValues), Math.max(...yValues)])
+      .range([height - margin.bottom, margin.top]);
+
+    // axes
+    svg.append("g")
+      .attr("transform", `translate(0, ${height - margin.bottom})`)
+      .call(axisBottom(xScale).ticks(5));
+
+    svg.append("g")
+      .attr("transform", `translate(${margin.left}, 0)`)
+      .call(axisLeft(yScale).ticks(5));
+
+    // points
+    svg.selectAll("circle")
+      .data(filteredFeatures)
+      .enter()
+      .append("circle")
+      .attr("cx", f => xScale(f.properties.avg_age))
+      .attr("cy", f => yScale(f.properties.population_change_per_1000))
+      .attr("r", 5)
+      .attr("fill", f => {
+        const val = f.properties.population_change_per_1000;
+        return val >= 0 ? interpolateRdBu(1) : interpolateRdBu(0); // simple red/blue
+      })
+      .attr("stroke", "#333")
+      .attr("stroke-width", 1)
+      .style("cursor", "pointer")
+      .on("mouseover", function(event, f) {
+        select(this).attr("r", 8);
+        // Tooltip could be added here
+      })
+      .on("mouseout", function(event, f) {
+        select(this).attr("r", 5);
+      })
+      .on("click", function(event, f) {
+        // zoom map to selected Gemeinde
+        selectedGemeindeFeature = f;
+        const layer = geojsonLayer.getLayers().find(l => l.feature === f);
+        if (layer) {
+          const bounds = layer.getBounds ? layer.getBounds() : layer.getLatLng().toBounds(1000);
+          map.fitBounds(bounds, { padding: [20, 20] });
+          layer.openTooltip();
+        }
+      });
+  }
+
   onMount(async () => {
     const L = await import("leaflet");
     await import("leaflet/dist/leaflet.css");
@@ -202,6 +281,7 @@
       attribution: '&copy; OpenStreetMap &copy; CARTO'
     }).addTo(map);
 
+    // Load GeoJSON
     const geojsonText = await fetch(`${base}/municipalities.geojson`).then(r => r.text());
     geojsonData = JSON.parse(geojsonText);
 
@@ -209,21 +289,17 @@
       if (f.properties?.g_name) f.properties.g_name = f.properties.g_name.normalize("NFC");
     });
 
+    // Add GeoJSON layer
     geojsonLayer = L.geoJSON(geojsonData, {
       style: f => ({ fillColor: "#fff", weight: 1, color: "white", fillOpacity: 0.8 }),
       onEachFeature: (f, layer) => {
-        layer.bindTooltip(`<b>${decodeUTF8(f.properties.g_name)}</b><br>${currentMetric}: ${f.properties[currentMetric].toFixed(0)}`);
+        layer.bindTooltip(`<b>${f.properties.g_name}</b><br>${f.properties[currentMetric]}`);
       }
     }).addTo(map);
 
-    const legend = L.control({ position: "bottomright" });
-    legend.onAdd = () => {
-      const div = L.DomUtil.create("div", "legend");
-      return div;
-    };
-    legend.addTo(map);
-
     updateStyle(currentMetric);
+
+    drawScatter();
   });
 
   function toggleMetric(metric) {
@@ -235,6 +311,7 @@
     selectedGemeindeFeature = null; // clear selected Gemeinde
     selectedBundesland = b;
     updateStyle(currentMetric);
+    drawScatter();
   }
 </script>
 
@@ -318,3 +395,8 @@
 </select>
 
 <div id="map"></div>
+
+<div style="display: flex; gap: 20px;">
+  <div id="map" style="flex: 1; height: 80vh;"></div>
+  <svg id="scatterplot" style="flex: 1; height: 80vh;"></svg>
+</div>
