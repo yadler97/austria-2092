@@ -1,7 +1,3 @@
-<h1>Welcome to SvelteKit</h1>
-<p>Visit <a href="https://svelte.dev/docs/kit">svelte.dev/docs/kit</a> to read the documentation</p>
-
-
 <script>
   import { onMount } from "svelte";
   import { scaleLinear } from "d3-scale";
@@ -11,9 +7,10 @@
   let map;
   let geojsonLayer;
   let geojsonData;
-  let currentMetric = "avg_age"; // default metric
-
+  let currentMetric = "avg_age"; 
   let selectedBundesland = "All";
+  let searchQuery = "";
+  let searchResults = [];
 
   const bundeslandMap = {
     "1": "Burgenland",
@@ -27,7 +24,6 @@
     "9": "Wien"
   };
 
-  // Decode Umlaute properly
   function decodeUTF8(str) {
     return decodeURIComponent(escape(str));
   }
@@ -35,16 +31,12 @@
   function updateStyle(metric) {
     if (!geojsonData || !geojsonLayer) return;
 
-    // Filter features based on selected Bundesland
     const filteredFeatures = geojsonData.features.filter(f => {
-      const gId = f.properties?.g_id?.toString(); // force string
+      const gId = f.properties?.g_id?.toString();
       const bl = gId ? bundeslandMap[gId[0]] : null;
       return selectedBundesland === "All" || bl === selectedBundesland;
     });
 
-    console.log(filteredFeatures.length + " features after filtering for " + selectedBundesland);
-
-    // Zoom to selected Bundesland
     if (filteredFeatures.length > 0) {
       const bounds = L.geoJSON(filteredFeatures).getBounds();
       map.fitBounds(bounds, { padding: [20, 20] });
@@ -52,7 +44,6 @@
       map.setView([47.5, 14.5], 7);
     }
 
-    // Use only filtered features to compute min/max
     const values = filteredFeatures
       .map(f => f.properties[metric])
       .filter(v => v !== null && v !== undefined);
@@ -64,7 +55,6 @@
       .domain([minVal, maxVal])
       .range([0, 1]);
 
-    // Apply styles
     geojsonLayer.setStyle(f => {
       const isVisible = filteredFeatures.includes(f);
       return {
@@ -76,7 +66,6 @@
       };
     });
 
-    // Update legend
     const legendDiv = document.querySelector(".legend");
     if (legendDiv) {
       legendDiv.innerHTML = `<b>${metric === "avg_age" ? "Average Age" : "Population Change 2025"}</b><br>`;
@@ -89,34 +78,65 @@
       legendDiv.innerHTML += `${minVal.toFixed(0)} &nbsp;&nbsp;&nbsp;&nbsp; ${maxVal.toFixed(0)}`;
     }
 
-    // Update tooltips
     geojsonLayer.eachLayer(layer => {
-        const f = layer.feature;
-        const isActive = filteredFeatures.includes(f);
+      const f = layer.feature;
+      const isActive = filteredFeatures.includes(f);
 
-        // Set style
-        layer.setStyle({
-            fillColor: isActive ? interpolateViridis(colorScale(f.properties[metric])) : "#ccc",
-            weight: 1,
-            color: "white",
-            dashArray: "2",
-            fillOpacity: isActive ? 0.8 : 0.2
-        });
+      layer.setStyle({
+        fillColor: isActive ? interpolateViridis(colorScale(f.properties[metric])) : "#ccc",
+        weight: 1,
+        color: "white",
+        dashArray: "2",
+        fillOpacity: isActive ? 0.8 : 0.2
+      });
 
-        // Bind/unbind tooltip based on activity
-        if (isActive) {
-            const val = f.properties[metric];
-            const formatted = val !== null && val !== undefined
-            ? Number.isInteger(val) ? val.toLocaleString() : val.toFixed(1)
-            : "n/a";
+      if (isActive) {
+        const val = f.properties[metric];
+        const formatted = val !== null && val !== undefined
+          ? Number.isInteger(val) ? val.toLocaleString() : val.toFixed(1)
+          : "n/a";
 
-            layer.bindTooltip(`<b>${decodeUTF8(f.properties.g_name)}</b><br>${metric}: ${formatted}`);
-        } else {
-            layer.unbindTooltip();
-        }
+        layer.bindTooltip(`<b>${decodeUTF8(f.properties.g_name)}</b><br>${metric}: ${formatted}`);
+      } else {
+        layer.unbindTooltip();
+      }
     });
   }
 
+  // Search function
+  function searchGemeinde() {
+    if (!searchQuery || !geojsonData) {
+      searchResults = [];
+      return;
+    }
+
+    const q = searchQuery.toLowerCase();
+    searchResults = geojsonData.features
+      .filter(f => {
+        const gId = f.properties.id?.toString();
+
+        const isFiveDigitString = /^[0-9]{5}$/.test(gId);
+        const isVienneseDistrict = Number(gId) >= 901 && Number(gId) <= 923;
+
+        return (
+          f.properties.name.toLowerCase().includes(q) &&
+          (isFiveDigitString || isVienneseDistrict)
+        );
+      })
+      .slice(0, 5); // top 5 suggestions
+  }
+
+  function selectGemeinde(f) {
+    searchQuery = f.properties.name;
+    searchResults = [];
+
+    const layer = geojsonLayer.getLayers().find(l => l.feature === f);
+    if (layer) {
+      const bounds = layer.getBounds ? layer.getBounds() : layer.getLatLng().toBounds(1000);
+      map.fitBounds(bounds, { padding: [20, 20] });
+      layer.openTooltip();
+    }
+  }
 
   onMount(async () => {
     const L = await import("leaflet");
@@ -128,16 +148,13 @@
       attribution: '&copy; OpenStreetMap &copy; CARTO'
     }).addTo(map);
 
-    // Load GeoJSON as text to avoid encoding issues
     const geojsonText = await fetch(`${base}/municipalities.geojson`).then(r => r.text());
     geojsonData = JSON.parse(geojsonText);
 
-    // normalize names
     geojsonData.features.forEach(f => {
       if (f.properties?.g_name) f.properties.g_name = f.properties.g_name.normalize("NFC");
     });
 
-    // Add GeoJSON layer
     geojsonLayer = L.geoJSON(geojsonData, {
       style: f => ({ fillColor: "#fff", weight: 1, color: "white", fillOpacity: 0.8 }),
       onEachFeature: (f, layer) => {
@@ -145,7 +162,6 @@
       }
     }).addTo(map);
 
-    // Add legend
     const legend = L.control({ position: "bottomright" });
     legend.onAdd = () => {
       const div = L.DomUtil.create("div", "legend");
@@ -153,7 +169,6 @@
     };
     legend.addTo(map);
 
-    // initial style
     updateStyle(currentMetric);
   });
 
@@ -173,7 +188,7 @@
 </svelte:head>
 
 <style>
-  #map { height: 90vh; width: 100%; }
+  #map { height: 80vh; width: 100%; }
   .legend {
     line-height: 18px;
     color: #555;
@@ -190,6 +205,33 @@
     padding: 5px 10px;
     cursor: pointer;
   }
+
+  .search-bar {
+    margin: 10px;
+    position: relative;
+  }
+  .search-bar input {
+    width: 200px;
+    padding: 5px;
+  }
+  .search-results {
+    position: absolute;
+    top: 28px;
+    left: 0;
+    background: white;
+    border: 1px solid #ccc;
+    z-index: 1000;
+    width: 200px;
+    max-height: 120px;
+    overflow-y: auto;
+  }
+  .search-results div {
+    padding: 4px 6px;
+    cursor: pointer;
+  }
+  .search-results div:hover {
+    background: #eee;
+  }
 </style>
 
 <div class="toggle-buttons">
@@ -197,17 +239,27 @@
   <button on:click={() => toggleMetric("population_change_per_1000")}>Population Change 2025</button>
 </div>
 
+<div class="search-bar">
+  <input
+    type="text"
+    placeholder="Search Gemeinde..."
+    bind:value={searchQuery}
+    on:input={searchGemeinde}
+  />
+  {#if searchResults.length > 0}
+    <div class="search-results">
+      {#each searchResults as result}
+        <div on:click={() => selectGemeinde(result)}>{result.properties.name}</div>
+      {/each}
+    </div>
+  {/if}
+</div>
+
 <select on:change={(e) => selectBundesland(e.target.value)}>
   <option value="All">All</option>
-  <option value="Burgenland">Burgenland</option>
-  <option value="Kärnten">Kärnten</option>
-  <option value="Niederösterreich">Niederösterreich</option>
-  <option value="Oberösterreich">Oberösterreich</option>
-  <option value="Salzburg">Salzburg</option>
-  <option value="Steiermark">Steiermark</option>
-  <option value="Tirol">Tirol</option>
-  <option value="Vorarlberg">Vorarlberg</option>
-  <option value="Wien">Wien</option>
+  {#each Object.values(bundeslandMap) as bl}
+    <option value={bl}>{bl}</option>
+  {/each}
 </select>
 
 <div id="map"></div>
