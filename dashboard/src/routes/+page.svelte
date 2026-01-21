@@ -29,9 +29,8 @@
   };
 
   // Scatter plot size
-  const width = 400;
-  const height = 400;
   const margin = { top: 20, right: 20, bottom: 40, left: 50 };
+  let width, height;
 
   let xScale, yScale;
 
@@ -263,6 +262,8 @@
         // left-click handled by circles
       });
 
+    const tooltip = select("#scatter-tooltip");
+
     // --- 2️⃣ Draw Points on TOP of brush ---
     svg.selectAll("circle")
       .data(filteredFeatures)
@@ -281,6 +282,17 @@
           .duration(150)
           .attr("r", 8)
           .attr("fill", "orange");
+
+        tooltip
+          .style("opacity", 1)
+          .html(`<b>${decodeUTF8(f.properties.name)}</b><br>Avg Age: ${f.properties.avg_age}<br>Pop Change: ${f.properties.population_change_per_1000}`)
+          .style("left", (event.pageX + 10) + "px")
+          .style("top", (event.pageY + 10) + "px");
+      })
+      .on("mousemove", function(event, f) {
+        tooltip
+          .style("left", (event.pageX + 10) + "px")
+          .style("top", (event.pageY + 10) + "px");
       })
       .on("mouseout", function(event, f) {
         select(this)
@@ -288,6 +300,8 @@
           .duration(150)
           .attr("r", 5)
           .attr("fill", f.properties.population_change_per_1000 >= 0 ? interpolateRdBu(1) : interpolateRdBu(0));
+
+        tooltip.style("opacity", 0);
       })
       .on("click", function(event, f) {
         // Left-click → zoom to Gemeinde
@@ -354,6 +368,10 @@
 
     updateStyle(currentMetric);
 
+    const container = document.getElementById("scatter-container");
+    width = container.clientWidth;
+    height = container.clientHeight;
+
     drawScatter();
   });
 
@@ -375,7 +393,14 @@
 </svelte:head>
 
 <style>
-  #map { height: 80vh; width: 100%; }
+  #map {
+    width: 100%;
+    height: 100%;
+  }
+  #scatterplot {
+    width: 100%;
+    height: 100%;
+  }
   .legend {
     line-height: 18px;
     color: #555;
@@ -449,9 +474,14 @@
   {/each}
 </select>
 
-<div id="map"></div>
+<div style="display: flex; gap: 20px; height: 80vh;">
+  <div id="map" style="flex: 1; height: 100%;"></div>
 
-<div style="display: flex; gap: 20px;">
-  <div id="map" style="flex: 1; height: 80vh;"></div>
-  <svg id="scatterplot" style="flex: 1; height: 80vh;"></svg>
+  <div id="scatter-container" style="flex: 1; position: relative;">
+    <svg id="scatterplot" style="width: 100%; height: 100%;"></svg>
+  </div>
+</div>
+
+<div id="scatter-tooltip"
+      style="position: absolute; pointer-events: none; background: white; padding: 4px 6px; border: 1px solid #ccc; border-radius: 3px; font-size: 12px; opacity: 0; transition: opacity 0.1s;">
 </div>
