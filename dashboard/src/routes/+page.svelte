@@ -2,9 +2,9 @@
   import { onMount } from "svelte";
   import { scaleLinear } from "d3-scale";
   import { interpolateViridis, interpolateRdBu } from "d3-scale-chromatic";
-  import { select } from "d3-selection";
+  import { select, pointer } from "d3-selection";
   import { axisBottom, axisLeft } from "d3-axis";
-  import { brush, brushSelection } from "d3-brush";
+  import { brush } from "d3-brush";
   import { base } from '$app/paths';
 
   let map;
@@ -207,9 +207,9 @@
     if (!geojsonData) return;
 
     const svg = select("#scatterplot");
-    svg.selectAll("*").remove(); // clear previous
+    svg.selectAll("*").remove(); // clear previous content
 
-    // Filter features based on selected Bundesland
+    // Filter features by selected Bundesland
     const filteredFeatures = geojsonData.features.filter(f => {
       const gId = f.properties?.id?.toString();
       const bl = gId ? bundeslandMap[gId[0]] : null;
@@ -221,6 +221,7 @@
     const xValues = filteredFeatures.map(f => f.properties.avg_age);
     const yValues = filteredFeatures.map(f => f.properties.population_change_per_1000);
 
+    // Scales
     xScale = scaleLinear()
       .domain([Math.min(...xValues), Math.max(...xValues)])
       .range([margin.left, width - margin.right]);
@@ -229,16 +230,40 @@
       .domain([Math.min(...yValues), Math.max(...yValues)])
       .range([height - margin.bottom, margin.top]);
 
-    // axes
+    // Axes
     svg.append("g")
       .attr("transform", `translate(0, ${height - margin.bottom})`)
       .call(axisBottom(xScale).ticks(5));
 
     svg.append("g")
-      .attr("transform", `translate(${margin.left}, 0)`)
+      .attr("transform", `translate(${margin.left},0)`)
       .call(axisLeft(yScale).ticks(5));
 
-    // points
+    // --- 1️⃣ Brush Layer ---
+    const brushG = svg.append("g")
+      .attr("class", "brush")
+      .call(
+        brush()
+          .extent([[margin.left, margin.top], [width - margin.right, height - margin.bottom]])
+          .on("brush end", brushed)
+      );
+
+    // Prevent default context menu
+    svg.on("contextmenu", (event) => event.preventDefault());
+
+    // Overlay: right-click brush, left-click ignored here
+    brushG.selectAll(".overlay")
+      .attr("fill", "transparent")
+      .style("pointer-events", "all")
+      .on("mousedown", function(event) {
+        if (event.button === 2) {
+          // right-click → start brush normally
+          select(this).dispatch("start");
+        }
+        // left-click handled by circles
+      });
+
+    // --- 2️⃣ Draw Points on TOP of brush ---
     svg.selectAll("circle")
       .data(filteredFeatures)
       .enter()
@@ -246,22 +271,26 @@
       .attr("cx", f => xScale(f.properties.avg_age))
       .attr("cy", f => yScale(f.properties.population_change_per_1000))
       .attr("r", 5)
-      .attr("fill", f => {
-        const val = f.properties.population_change_per_1000;
-        return val >= 0 ? interpolateRdBu(1) : interpolateRdBu(0); // simple red/blue
-      })
+      .attr("fill", f => f.properties.population_change_per_1000 >= 0 ? interpolateRdBu(1) : interpolateRdBu(0))
       .attr("stroke", "#333")
       .attr("stroke-width", 1)
       .style("cursor", "pointer")
       .on("mouseover", function(event, f) {
-        select(this).attr("r", 8);
-        // Tooltip could be added here
+        select(this)
+          .transition()
+          .duration(150)
+          .attr("r", 8)
+          .attr("fill", "orange");
       })
       .on("mouseout", function(event, f) {
-        select(this).attr("r", 5);
+        select(this)
+          .transition()
+          .duration(150)
+          .attr("r", 5)
+          .attr("fill", f.properties.population_change_per_1000 >= 0 ? interpolateRdBu(1) : interpolateRdBu(0));
       })
       .on("click", function(event, f) {
-        // zoom map to selected Gemeinde
+        // Left-click → zoom to Gemeinde
         selectedGemeindeFeature = f;
         const layer = geojsonLayer.getLayers().find(l => l.feature === f);
         if (layer) {
@@ -271,45 +300,30 @@
         }
       });
 
-    // Brush
-    const brushBehavior = brush()
-      .extent([[margin.left, margin.top], [width - margin.right, height - margin.bottom]])
-      .on("brush end", brushed);
+    function brushed({ selection }) {
+      if (!selection) return;
+      const [[x0, y0], [x1, y1]] = selection;
 
-    svg.append("g")
-      .attr("class", "brush")
-      .call(brushBehavior);
-  }
+      const selectedFeatures = filteredFeatures.filter(f => {
+        const cx = xScale(f.properties.avg_age);
+        const cy = yScale(f.properties.population_change_per_1000);
+        return cx >= x0 && cx <= x1 && cy >= y0 && cy <= y1;
+      });
 
-  function brushed({ selection }) {
-    if (!selection) return;
+      // Highlight on scatterplot
+      svg.selectAll("circle")
+        .attr("fill", f => selectedFeatures.includes(f) ? "orange" : f.properties.population_change_per_1000 >= 0 ? interpolateRdBu(1) : interpolateRdBu(0));
 
-    const [[x0, y0], [x1, y1]] = selection;
-
-    const selectedFeatures = geojsonData.features.filter(f => {
-      const gId = f.properties?.g_id?.toString();
-      const bl = gId ? bundeslandMap[gId[0]] : null;
-      if (selectedBundesland !== "All" && bl !== selectedBundesland) return false;
-
-      const cx = xScale(f.properties.avg_age);
-      const cy = yScale(f.properties.population_change_per_1000);
-      return cx >= x0 && cx <= x1 && cy >= y0 && cy <= y1;
-    });
-
-    // Highlight on scatter plot
-    const svg = select("#scatterplot");
-    svg.selectAll("circle")
-      .attr("fill", f => selectedFeatures.includes(f) ? "orange" : "#ccc");
-
-    // Highlight on map
-    geojsonLayer.eachLayer(layer => {
-      const f = layer.feature;
-      if (selectedFeatures.includes(f)) {
-        layer.setStyle({ fillOpacity: 0.9, color: "orange" });
-      } else {
-        layer.setStyle({ fillOpacity: 0.5, color: "white" });
-      }
-    });
+      // Highlight on map
+      geojsonLayer.eachLayer(layer => {
+        const f = layer.feature;
+        if (selectedFeatures.includes(f)) {
+          layer.setStyle({ fillOpacity: 0.9, color: "orange" });
+        } else {
+          layer.setStyle({ fillOpacity: 0.5, color: "white" });
+        }
+      });
+    }
   }
 
   onMount(async () => {
