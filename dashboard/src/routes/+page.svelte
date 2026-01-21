@@ -8,11 +8,13 @@
   import { base } from '$app/paths';
 
   let map;
+  let legendDiv;
   let geojsonLayer;
   let geojsonData;
   let currentMetric = "avg_age"; 
   let selectedBundesland = "All";
   let searchQuery = "";
+  let searchInput;
   let searchResults = [];
   let selectedGemeindeFeature = null;
 
@@ -113,22 +115,34 @@
     });
 
     // Update legend
-    const legendDiv = document.querySelector(".legend");
+    // const legendDiv = document.querySelector(".legend");
     if (legendDiv) {
-      legendDiv.innerHTML = `<b>${metric === "avg_age" ? "Average Age" : "Population Change 2025"}</b><br>`;
+      legendDiv.innerHTML = `<b>${
+        metric === "avg_age"
+          ? "Average Age"
+          : metric === "population_change_per_1000"
+          ? "Population Change 2025"
+          : "Foreigner Share 2025"
+      }</b><br>`;
       const gradient = document.createElement("div");
       gradient.style.height = "12px";
-      gradient.style.width = "100px";
+      gradient.style.minWidth = "100px";
+      gradient.style.width = "100%";
       gradient.style.margin = "5px 0";
 
       if (metric === "population_change_per_1000") {
-        gradient.style.background = `linear-gradient(to right, ${interpolateRdBu(0)}, ${interpolateRdBu(0.5)}, ${interpolateRdBu(1)})`;
+        gradient.style.background = `linear-gradient(to right, ${interpolateRdBu(1)}, ${interpolateRdBu(0.5)}, ${interpolateRdBu(0)})`;
       } else {
         gradient.style.background = `linear-gradient(to right, ${interpolateViridis(0)}, ${interpolateViridis(1)})`;
       }
 
       legendDiv.appendChild(gradient);
-      legendDiv.innerHTML += `${minVal.toFixed(0)} &nbsp;&nbsp;&nbsp;&nbsp; ${maxVal.toFixed(0)}`;
+      legendDiv.innerHTML += `
+        <div style="display: flex">
+          <span style="width: -webkit-fill-available">${minVal.toFixed(0)}</span>
+          <span>${maxVal.toFixed(0)}</span>
+        </div>
+      `;
     }
 
     // Update tooltips
@@ -152,12 +166,19 @@
       });
 
       if (isActive) {
-        const formatted =
-          val !== null && val !== undefined
-            ? Number.isInteger(val)
-              ? val.toLocaleString()
-              : val.toFixed(1)
-            : "n/a";
+        let formatted;
+
+        if (val === null || val === undefined) {
+          formatted = "n/a";
+        } else if (metric === "foreigner_share_2025") {
+          formatted = (val * 100).toFixed(1) + " %";
+        } else if (metric === "population_change_per_1000") {
+          formatted = val.toFixed(1);
+        } else if (Number.isInteger(val)) {
+          formatted = val.toLocaleString();
+        } else {
+          formatted = val.toFixed(1);
+        }
         layer.bindTooltip(`<b>${decodeUTF8(f.properties.g_name)}</b><br>${metric}: ${formatted}`);
       } else {
         layer.unbindTooltip();
@@ -240,6 +261,23 @@
     svg.append("g")
       .attr("transform", `translate(${margin.left},0)`)
       .call(axisLeft(yScale).ticks(5));
+
+    svg.append("text")
+      .attr("x", width / 2)
+      .attr("y", height - 5)
+      .attr("text-anchor", "middle")
+      .attr("font-size", "12px")
+      .attr("font-family", "sans-serif")
+      .text("Average Age");
+
+    svg.append("text")
+      .attr("transform", "rotate(-90)")
+      .attr("x", -height / 2)
+      .attr("y", 15)
+      .attr("text-anchor", "middle")
+      .attr("font-size", "12px")
+      .attr("font-family", "sans-serif")
+      .text("Population Change per 1000");
 
     // --- 1️⃣ Brush Layer ---
     const brushG = svg.append("g")
@@ -374,6 +412,15 @@
       }
     }).addTo(map);
 
+    const legend = L.control({ position: "bottomright" });
+
+    legend.onAdd = () => {
+      legendDiv = L.DomUtil.create("div", "legend");
+      return legendDiv;
+    };
+
+    legend.addTo(map);
+
     updateStyle(currentMetric);
 
     const container = document.getElementById("scatter-container");
@@ -393,6 +440,10 @@
     selectedBundesland = b;
     updateStyle(currentMetric);
     drawScatter();
+  }
+
+  function selectAllText() {
+    if (searchInput) searchInput.select();
   }
 </script>
 
@@ -420,12 +471,6 @@
   .toggle-buttons {
     margin: 10px;
   }
-  .toggle-buttons button {
-    margin-right: 10px;
-    padding: 5px 10px;
-    cursor: pointer;
-  }
-
   .search-bar {
     margin: 10px;
     position: relative;
@@ -440,7 +485,7 @@
     left: 0;
     background: white;
     border: 1px solid #ccc;
-    z-index: 1000;
+    z-index: 2000;
     width: 200px;
     max-height: 120px;
     overflow-y: auto;
@@ -452,11 +497,73 @@
   .search-results div:hover {
     background: #eee;
   }
+  .toggle-buttons button {
+    margin-right: 10px;
+    padding: 5px 10px;
+    cursor: pointer;
+    background: #f5f5f5;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    transition: all 0.15s ease;
+  }
+  .toggle-buttons button:hover {
+    background: #eaeaea;
+  }
+  .toggle-buttons button.active {
+    background: #333;
+    color: white;
+    border-color: #333;
+    font-weight: 600;
+  }
+  .toggle-buttons, .bundesland-selection span {
+    font-family: sans-serif;
+    font-size: inherit;
+    line-height: inherit;
+  }
+  .search-bar input {
+    background: #f5f5f5;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    padding: 5px 10px;
+    font-family: sans-serif;
+    font-size: inherit;
+    transition: all 0.15s ease;
+    width: 200px;
+  }
+  .search-bar input:hover,
+  .search-bar input:focus {
+    background: #eaeaea;
+    outline: none;
+    border-color: #999;
+  }
+  .proposed {
+      font-family: sans-serif;
+  }
+  .bundesland-selection {
+    margin: 10px;
+  }
+  .bundesland-selection select {
+    background: #f5f5f5;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    padding: 5px 10px;
+    font-family: sans-serif;
+    font-size: inherit;
+    transition: all 0.15s ease;
+  }
+  .bundesland-selection select:hover,
+  .bundesland-selection select:focus {
+    background: #eaeaea;
+    outline: none;
+    border-color: #999;
+  }
 </style>
 
 <div class="toggle-buttons">
-  <button on:click={() => toggleMetric("avg_age")}>Average Age</button>
-  <button on:click={() => toggleMetric("population_change_per_1000")}>Population Change 2025</button>
+  <span>Select Metric:</span>
+  <button class:active={currentMetric === "avg_age"} on:click={() => toggleMetric("avg_age")}>Average Age</button>
+  <button class:active={currentMetric === "population_change_per_1000"} on:click={() => toggleMetric("population_change_per_1000")}>Population Change 2025</button>
+  <button class:active={currentMetric === "foreigner_share_2025"} on:click={() => toggleMetric("foreigner_share_2025")}>Foreigner Share 2025</button>
 </div>
 
 <div class="search-bar">
@@ -465,22 +572,27 @@
     placeholder="Search Gemeinde..."
     bind:value={searchQuery}
     on:input={searchGemeinde}
+    on:focus={selectAllText}
+    bind:this={searchInput}
   />
   {#if searchResults.length > 0}
     <div class="search-results">
       {#each searchResults as result}
-        <div on:click={() => selectGemeinde(result)}>{result.properties.name}</div>
+        <div class="proposed" on:click={() => selectGemeinde(result)}>{result.properties.name}</div>
       {/each}
     </div>
   {/if}
 </div>
 
-<select on:change={(e) => selectBundesland(e.target.value)}>
-  <option value="All">All</option>
-  {#each Object.values(bundeslandMap) as bl}
-    <option value={bl}>{bl}</option>
-  {/each}
-</select>
+<div class="bundesland-selection">
+  <span>Select Bundesland:</span>
+  <select on:change={(e) => selectBundesland(e.target.value)}>
+    <option value="All">All</option>
+    {#each Object.values(bundeslandMap) as bl}
+      <option value={bl}>{bl}</option>
+    {/each}
+  </select>
+</div>
 
 <div style="display: flex; gap: 20px; height: 80vh;">
   <div id="map" style="flex: 1; height: 100%;"></div>

@@ -4,6 +4,8 @@ from shapely import wkt
 
 data = pd.read_csv("wrangled_data/merged_data.csv", sep=";")
 
+data['foreigner_share_2025'] = data['foreigner_population_2025'] / data['total_population_2025']
+
 data['geometry'] = data['geometry'].apply(lambda x: wkt.loads(x) if pd.notnull(x) else None)
 data = gpd.GeoDataFrame(data, geometry='geometry', crs="EPSG:31287")
 
