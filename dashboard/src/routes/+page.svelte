@@ -286,9 +286,14 @@
           .attr("r", 8)
           .attr("fill", "orange");
 
+        const avgAge = f.properties.avg_age !== null ? f.properties.avg_age.toFixed(1) : "n/a";
+        const popChange = f.properties.population_change_per_1000 !== null
+          ? f.properties.population_change_per_1000.toFixed(1)
+          : "n/a";
+
         tooltip
           .style("opacity", 1)
-          .html(`<b>${f.properties.name}</b><br>Avg Age: ${f.properties.avg_age}<br>Pop Change: ${f.properties.population_change_per_1000}`)
+          .html(`<b>${f.properties.name}</b><br>avg_age: ${avgAge}<br>population_change_per_1000: ${popChange}`)
           .style("left", (event.pageX + 10) + "px")
           .style("top", (event.pageY + 10) + "px");
       })
