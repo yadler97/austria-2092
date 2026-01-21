@@ -221,12 +221,15 @@
     const yValues = filteredFeatures.map(f => f.properties.population_change_per_1000);
 
     // Scales
+    const xPadding = (Math.max(...xValues) - Math.min(...xValues)) * 0.05; // 5% padding
+    const yPadding = (Math.max(...yValues) - Math.min(...yValues)) * 0.05;
+
     xScale = scaleLinear()
-      .domain([Math.min(...xValues), Math.max(...xValues)])
+      .domain([Math.min(...xValues) - xPadding, Math.max(...xValues) + xPadding])
       .range([margin.left, width - margin.right]);
 
     yScale = scaleLinear()
-      .domain([Math.min(...yValues), Math.max(...yValues)])
+      .domain([Math.min(...yValues) - yPadding, Math.max(...yValues) + yPadding])
       .range([height - margin.bottom, margin.top]);
 
     // Axes
@@ -285,7 +288,7 @@
 
         tooltip
           .style("opacity", 1)
-          .html(`<b>${decodeUTF8(f.properties.name)}</b><br>Avg Age: ${f.properties.avg_age}<br>Pop Change: ${f.properties.population_change_per_1000}`)
+          .html(`<b>${f.properties.name}</b><br>Avg Age: ${f.properties.avg_age}<br>Pop Change: ${f.properties.population_change_per_1000}`)
           .style("left", (event.pageX + 10) + "px")
           .style("top", (event.pageY + 10) + "px");
       })
