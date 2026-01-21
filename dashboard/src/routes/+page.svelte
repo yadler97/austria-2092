@@ -4,6 +4,7 @@
   import { interpolateViridis, interpolateRdBu } from "d3-scale-chromatic";
   import { select } from "d3-selection";
   import { axisBottom, axisLeft } from "d3-axis";
+  import { brush, brushSelection } from "d3-brush";
   import { base } from '$app/paths';
 
   let map;
@@ -269,6 +270,46 @@
           layer.openTooltip();
         }
       });
+
+    // Brush
+    const brushBehavior = brush()
+      .extent([[margin.left, margin.top], [width - margin.right, height - margin.bottom]])
+      .on("brush end", brushed);
+
+    svg.append("g")
+      .attr("class", "brush")
+      .call(brushBehavior);
+  }
+
+  function brushed({ selection }) {
+    if (!selection) return;
+
+    const [[x0, y0], [x1, y1]] = selection;
+
+    const selectedFeatures = geojsonData.features.filter(f => {
+      const gId = f.properties?.g_id?.toString();
+      const bl = gId ? bundeslandMap[gId[0]] : null;
+      if (selectedBundesland !== "All" && bl !== selectedBundesland) return false;
+
+      const cx = xScale(f.properties.avg_age);
+      const cy = yScale(f.properties.population_change_per_1000);
+      return cx >= x0 && cx <= x1 && cy >= y0 && cy <= y1;
+    });
+
+    // Highlight on scatter plot
+    const svg = select("#scatterplot");
+    svg.selectAll("circle")
+      .attr("fill", f => selectedFeatures.includes(f) ? "orange" : "#ccc");
+
+    // Highlight on map
+    geojsonLayer.eachLayer(layer => {
+      const f = layer.feature;
+      if (selectedFeatures.includes(f)) {
+        layer.setStyle({ fillOpacity: 0.9, color: "orange" });
+      } else {
+        layer.setStyle({ fillOpacity: 0.5, color: "white" });
+      }
+    });
   }
 
   onMount(async () => {
