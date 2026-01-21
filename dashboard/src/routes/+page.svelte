@@ -17,6 +17,7 @@
   let searchInput;
   let searchResults = [];
   let selectedGemeindeFeature = null;
+  let circleById = new Map();
 
   const bundeslandMap = {
     "1": "Burgenland",
@@ -28,6 +29,12 @@
     "7": "Tirol",
     "8": "Vorarlberg",
     "9": "Wien"
+  };
+
+  const metricLabels = {
+    avg_age: "Average Age",
+    population_change_per_1000: "Population Change Per 1000",
+    foreigner_share_2025: "Foreigner Share"
   };
 
   // Scatter plot size
@@ -179,7 +186,7 @@
         } else {
           formatted = val.toFixed(1);
         }
-        layer.bindTooltip(`<b>${decodeUTF8(f.properties.g_name)}</b><br>${metric}: ${formatted}`);
+        layer.bindTooltip(`<b>${decodeUTF8(f.properties.g_name)}</b><br>${metricLabels[metric]}: ${formatted}`);
       } else {
         layer.unbindTooltip();
       }
@@ -317,6 +324,9 @@
       .attr("stroke", "#333")
       .attr("stroke-width", 1)
       .style("cursor", "pointer")
+      .each(function(f) {
+        circleById.set(f.properties.id, select(this)); // store reference
+      })
       .on("mouseover", function(event, f) {
         select(this)
           .transition()
@@ -324,14 +334,23 @@
           .attr("r", 8)
           .attr("fill", "orange");
 
+        const id = f.properties.id;
+        const layer = geojsonLayer.getLayers().find(l => l.feature.properties.id === id);
+        if (layer) {
+          layer.setStyle({ fillOpacity: 0.9, color: "orange" });
+        }
+
         const avgAge = f.properties.avg_age !== null ? f.properties.avg_age.toFixed(1) : "n/a";
         const popChange = f.properties.population_change_per_1000 !== null
           ? f.properties.population_change_per_1000.toFixed(1)
           : "n/a";
+        const foreignerShare = f.properties.foreigner_share_2025 !== null
+          ? (f.properties.foreigner_share_2025 * 100).toFixed(1) + " %"
+          : "n/a";
 
         tooltip
           .style("opacity", 1)
-          .html(`<b>${f.properties.name}</b><br>avg_age: ${avgAge}<br>population_change_per_1000: ${popChange}`)
+          .html(`<b>${f.properties.name}</b><br>${metricLabels["avg_age"]}: ${avgAge}<br>${metricLabels["population_change_per_1000"]}: ${popChange}<br>${metricLabels["foreigner_share_2025"]}: ${foreignerShare}`)
           .style("left", (event.pageX + 10) + "px")
           .style("top", (event.pageY + 10) + "px");
       })
@@ -347,6 +366,9 @@
           .attr("r", 5)
           .attr("fill", f.properties.population_change_per_1000 >= 0 ? interpolateRdBu(1) : interpolateRdBu(0));
 
+        const layer = geojsonLayer.getLayers().find(l => l.feature.properties.id === f.properties.id);
+        if (layer) resetFeatureStyle(layer);
+
         tooltip.style("opacity", 0);
       })
       .on("click", function(event, f) {
@@ -358,6 +380,29 @@
           map.fitBounds(bounds, { padding: [20, 20] });
           layer.openTooltip();
         }
+      });
+
+      geojsonLayer.eachLayer(layer => {
+        const id = layer.feature.properties.id;
+
+        layer.on("mouseover", () => {
+          layer.setStyle({ fillOpacity: 0.9, color: "orange" });
+
+          const circle = circleById.get(id);
+          if (circle) {
+            circle.attr("fill", "orange").attr("r", 8);
+          }
+        });
+
+        layer.on("mouseout", () => {
+          resetFeatureStyle(layer);
+
+          const circle = circleById.get(layer.feature.properties.id);
+          if (circle) {
+            circle.attr("fill", circle.data()[0].properties.population_change_per_1000 >= 0 ? interpolateRdBu(1) : interpolateRdBu(0))
+                  .attr("r", 5);
+          }
+        });
       });
 
     function brushed({ selection }) {
@@ -385,6 +430,69 @@
       });
     }
   }
+
+  function resetFeatureStyle(layer) {
+    const f = layer.feature;
+
+    // Check if feature is visible under current Bundesland filter
+    const gId = f.properties?.g_id?.toString();
+    const bl = gId ? bundeslandMap[gId[0]] : null;
+    const isVisible = selectedBundesland === "All" || bl === selectedBundesland;
+
+    if (!isVisible) {
+      layer.setStyle({
+        fillColor: "#ccc",
+        weight: 1,
+        color: "white",
+        dashArray: "2",
+        fillOpacity: 0.2
+      });
+      return;
+    }
+
+    // Compute color for the current metric
+    const val = f.properties[currentMetric];
+
+    let t;
+    if (currentMetric === "population_change_per_1000") {
+      const posMax = Math.max(val, 0);
+      const negMin = Math.min(val, 0);
+
+      if (val === 0) t = 0.5;
+      else if (val > 0) t = 0.5 + 0.5 * Math.log1p(val) / Math.log1p(posMax);
+      else t = 0.5 - 0.5 * Math.log1p(-val) / Math.log1p(-negMin);
+    } else {
+      // Sequential metric: compute min/max only among filtered features
+      const filteredFeatures = geojsonData.features.filter(f => {
+        const gId = f.properties?.g_id?.toString();
+        const bl = gId ? bundeslandMap[gId[0]] : null;
+        return selectedBundesland === "All" || bl === selectedBundesland;
+      });
+
+      const values = filteredFeatures
+        .map(f => f.properties[currentMetric])
+        .filter(v => v != null);
+
+      const minVal = Math.min(...values);
+      const maxVal = Math.max(...values);
+
+      t = scaleLinear().domain([minVal, maxVal]).range([0, 1])(val);
+    }
+
+    const fillColor =
+      currentMetric === "population_change_per_1000"
+        ? interpolateRdBu(1 - t)
+        : interpolateViridis(Math.max(0, Math.min(1, t)));
+
+    layer.setStyle({
+      fillColor,
+      weight: 1,
+      color: "white",
+      dashArray: "2",
+      fillOpacity: 0.8
+    });
+  }
+
 
   onMount(async () => {
     const L = await import("leaflet");
@@ -603,5 +711,5 @@
 </div>
 
 <div id="scatter-tooltip"
-      style="position: absolute; pointer-events: none; background: white; padding: 4px 6px; border: 1px solid #ccc; border-radius: 3px; font-size: 12px; opacity: 0; transition: opacity 0.1s;">
+  style="position: absolute; pointer-events: none; background: white; padding: 4px 6px; border: 1px solid #ccc; border-radius: 3px; font-size: 12px; opacity: 0; transition: opacity 0.1s; font-family: sans-serif;">
 </div>
