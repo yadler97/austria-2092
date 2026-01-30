@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { scaleLinear } from "d3-scale";
   import { interpolateViridis, interpolateRdBu } from "d3-scale-chromatic";
-  import { select, pointer } from "d3-selection";
+  import { select } from "d3-selection";
   import { axisBottom, axisLeft } from "d3-axis";
   import { brush } from "d3-brush";
   import { base } from '$app/paths';
@@ -18,6 +18,10 @@
   let searchResults = [];
   let selectedGemeindeFeature = null;
   let circleById = new Map();
+  let adminLevel = "districts";
+  let fullGeojsonData;
+  let hoverLayer;
+  let hoverId = null
 
   const bundeslandMap = {
     "1": "Burgenland",
@@ -193,6 +197,13 @@
     });
   }
 
+  function isFeatureInBundesland(f) {
+    if (!f.properties?.id) return false;
+    const gId = f.properties.id.toString();
+    const bl = bundeslandMap[gId[0]]; // first digit = Bundesland code
+    return selectedBundesland === "All" || bl === selectedBundesland;
+  }
+
   // Search function
   function searchGemeinde() {
     if (!searchQuery || !geojsonData) {
@@ -201,17 +212,22 @@
     }
 
     const q = searchQuery.toLowerCase();
+
     searchResults = geojsonData.features
       .filter(f => {
-        const gId = f.properties.id?.toString();
+        const id = f.properties?.id;
+        const name = f.properties?.g_name?.toLowerCase() || "";
 
-        const isFiveDigitString = /^[0-9]{5}$/.test(gId);
-        const isVienneseDistrict = Number(gId) >= 901 && Number(gId) <= 923;
+        // Filter by name match
+        if (!name.includes(q)) return false;
 
-        return (
-          f.properties.name.toLowerCase().includes(q) &&
-          (isFiveDigitString || isVienneseDistrict)
-        );
+        // Filter by admin level
+        const levelOk = adminLevel === "districts" ? isDistrict(id) : isMunicipality(id);
+
+        // Filter by selected Bundesland
+        const blOk = isFeatureInBundesland(f);
+
+        return levelOk && blOk;
       })
       .slice(0, 5); // top 5 suggestions
   }
@@ -237,11 +253,10 @@
     svg.selectAll("*").remove(); // clear previous content
 
     // Filter features by selected Bundesland
-    const filteredFeatures = geojsonData.features.filter(f => {
-      const gId = f.properties?.id?.toString();
-      const bl = gId ? bundeslandMap[gId[0]] : null;
-      return selectedBundesland === "All" || bl === selectedBundesland;
-    });
+    const filteredFeatures = geojsonData.features.filter(f =>
+      isFeatureInBundesland(f) &&
+      (adminLevel === "districts" ? isDistrict(f.properties.id) : isMunicipality(f.properties.id))
+    );
 
     if (filteredFeatures.length === 0) return;
 
@@ -331,14 +346,10 @@
         select(this)
           .transition()
           .duration(150)
-          .attr("r", 8)
+          .attr("r", 12)
           .attr("fill", "orange");
 
-        const id = f.properties.id;
-        const layer = geojsonLayer.getLayers().find(l => l.feature.properties.id === id);
-        if (layer) {
-          layer.setStyle({ fillOpacity: 0.9, color: "orange" });
-        }
+        hoverFeatureOnMap(f);
 
         const avgAge = f.properties.avg_age !== null ? f.properties.avg_age.toFixed(1) : "n/a";
         const popChange = f.properties.population_change_per_1000 !== null
@@ -366,8 +377,7 @@
           .attr("r", 5)
           .attr("fill", f.properties.population_change_per_1000 >= 0 ? interpolateRdBu(1) : interpolateRdBu(0));
 
-        const layer = geojsonLayer.getLayers().find(l => l.feature.properties.id === f.properties.id);
-        if (layer) resetFeatureStyle(layer);
+        unhoverFeatureOnMap(f);
 
         tooltip.style("opacity", 0);
       })
@@ -386,16 +396,17 @@
         const id = layer.feature.properties.id;
 
         layer.on("mouseover", () => {
-          layer.setStyle({ fillOpacity: 0.9, color: "orange" });
+          if (!isFeatureInBundesland(layer.feature)) return;
+          hoverFeatureOnMap(layer.feature);
 
           const circle = circleById.get(id);
           if (circle) {
-            circle.attr("fill", "orange").attr("r", 8);
+            circle.attr("fill", "orange").attr("r", 12);
           }
         });
 
         layer.on("mouseout", () => {
-          resetFeatureStyle(layer);
+          unhoverFeatureOnMap(layer.feature);
 
           const circle = circleById.get(layer.feature.properties.id);
           if (circle) {
@@ -431,66 +442,62 @@
     }
   }
 
-  function resetFeatureStyle(layer) {
-    const f = layer.feature;
+  function refreshGeojsonLayer() {
+    if (geojsonLayer) map.removeLayer(geojsonLayer);
 
-    // Check if feature is visible under current Bundesland filter
-    const gId = f.properties?.g_id?.toString();
-    const bl = gId ? bundeslandMap[gId[0]] : null;
-    const isVisible = selectedBundesland === "All" || bl === selectedBundesland;
+    geojsonData = {
+      ...fullGeojsonData,
+      features: filterFeaturesByLevel(fullGeojsonData.features)
+    };
 
-    if (!isVisible) {
-      layer.setStyle({
-        fillColor: "#ccc",
-        weight: 1,
-        color: "white",
-        dashArray: "2",
-        fillOpacity: 0.2
-      });
-      return;
+    geojsonLayer = L.geoJSON(geojsonData, {
+      style: f => ({ fillColor: "#fff", weight: 1, color: "white", fillOpacity: 0.8 }),
+      onEachFeature: (f, layer) => {
+        layer.bindTooltip(`<b>${f.properties.g_name}</b><br>${f.properties[currentMetric]}`);
+      }
+    }).addTo(map);
+
+    circleById.clear();
+    selectedGemeindeFeature = null;
+
+    updateStyle(currentMetric);
+    drawScatter();
+  }
+
+  function hoverFeatureOnMap(feature) {
+    const id = feature.properties.id;
+
+    // If already hovering this feature, do nothing
+    if (hoverId === id) return;
+
+    // Remove previous hover overlay
+    if (hoverLayer) {
+      map.removeLayer(hoverLayer);
+      hoverLayer = null;
     }
 
-    // Compute color for the current metric
-    const val = f.properties[currentMetric];
+    // Add new hover overlay
+    hoverLayer = L.geoJSON(feature, {
+      style: {
+        fillOpacity: 0.5,
+        weight: 3,
+        color: "#ff6600",
+        dashArray: ""
+      },
+      interactive: false // important: overlay doesn't catch mouse events
+    }).addTo(map);
 
-    let t;
-    if (currentMetric === "population_change_per_1000") {
-      const posMax = Math.max(val, 0);
-      const negMin = Math.min(val, 0);
+    hoverId = id;
+  }
 
-      if (val === 0) t = 0.5;
-      else if (val > 0) t = 0.5 + 0.5 * Math.log1p(val) / Math.log1p(posMax);
-      else t = 0.5 - 0.5 * Math.log1p(-val) / Math.log1p(-negMin);
-    } else {
-      // Sequential metric: compute min/max only among filtered features
-      const filteredFeatures = geojsonData.features.filter(f => {
-        const gId = f.properties?.g_id?.toString();
-        const bl = gId ? bundeslandMap[gId[0]] : null;
-        return selectedBundesland === "All" || bl === selectedBundesland;
-      });
+  function unhoverFeatureOnMap(feature) {
+    const id = feature.properties.id;
 
-      const values = filteredFeatures
-        .map(f => f.properties[currentMetric])
-        .filter(v => v != null);
-
-      const minVal = Math.min(...values);
-      const maxVal = Math.max(...values);
-
-      t = scaleLinear().domain([minVal, maxVal]).range([0, 1])(val);
+    if (hoverId === id && hoverLayer) {
+      map.removeLayer(hoverLayer);
+      hoverLayer = null;
+      hoverId = null;
     }
-
-    const fillColor =
-      currentMetric === "population_change_per_1000"
-        ? interpolateRdBu(1 - t)
-        : interpolateViridis(Math.max(0, Math.min(1, t)));
-
-    layer.setStyle({
-      fillColor,
-      weight: 1,
-      color: "white",
-      dashArray: "2",
-      fillOpacity: 0.8
-    });
   }
 
 
@@ -506,11 +513,16 @@
 
     // Load GeoJSON
     const geojsonText = await fetch(`${base}/municipalities.geojson`).then(r => r.text());
-    geojsonData = JSON.parse(geojsonText);
+    fullGeojsonData = JSON.parse(geojsonText);
 
-    geojsonData.features.forEach(f => {
+    fullGeojsonData.features.forEach(f => {
       if (f.properties?.g_name) f.properties.g_name = f.properties.g_name.normalize("NFC");
     });
+
+    geojsonData = {
+      type: "FeatureCollection",
+      features: filterFeaturesByLevel(fullGeojsonData.features)
+    };
 
     // Add GeoJSON layer
     geojsonLayer = L.geoJSON(geojsonData, {
@@ -552,6 +564,27 @@
 
   function selectAllText() {
     if (searchInput) searchInput.select();
+  }
+
+  function isDistrict(id) {
+    if (!id) return false;
+    const s = id.toString();
+    return s.length === 3 || (Number(s) >= 901 && Number(s) <= 923);
+  }
+
+  function isMunicipality(id) {
+    if (!id) return false;
+    const s = id.toString();
+    return s.length === 5 || (Number(s) >= 901 && Number(s) <= 923);
+  }
+
+  function filterFeaturesByLevel(features) {
+    return features.filter(f => {
+      const id = f.properties?.id;
+      return adminLevel === "districts"
+        ? isDistrict(id)
+        : isMunicipality(id);
+    });
   }
 </script>
 
@@ -672,6 +705,21 @@
   <button class:active={currentMetric === "avg_age"} on:click={() => toggleMetric("avg_age")}>Average Age</button>
   <button class:active={currentMetric === "population_change_per_1000"} on:click={() => toggleMetric("population_change_per_1000")}>Population Change 2025</button>
   <button class:active={currentMetric === "foreigner_share_2025"} on:click={() => toggleMetric("foreigner_share_2025")}>Foreigner Share 2025</button>
+</div>
+
+<div class="toggle-buttons">
+  <span>Admin level:</span>
+  <button
+    class:active={adminLevel === "districts"}
+    on:click={() => { adminLevel = "districts"; refreshGeojsonLayer(); }}>
+    Districts
+  </button>
+
+  <button
+    class:active={adminLevel === "municipalities"}
+    on:click={() => { adminLevel = "municipalities"; refreshGeojsonLayer(); }}>
+    Municipalities
+  </button>
 </div>
 
 <div class="search-bar">

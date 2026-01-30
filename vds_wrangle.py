@@ -211,18 +211,21 @@ time_series_foreigner_df.to_csv("wrangled_data/time_series_foreigner_data.csv", 
 
 # SHAPEFILE
 
-gdf_path = "data/OGDEXT_GEM_1_STATISTIK_AUSTRIA_20250101/STATISTIK_AUSTRIA_GEM_20250101.shp"
+gdf_municipalities_path = "data/OGDEXT_GEM_1_STATISTIK_AUSTRIA_20250101/STATISTIK_AUSTRIA_GEM_20250101.shp"
+gdf_municipalities = gpd.read_file(gdf_municipalities_path)
 
-gdf = gpd.read_file(gdf_path)
+gdf_districts_path = "data/OGDEXT_POLBEZ_1_STATISTIK_AUSTRIA_20250101/STATISTIK_AUSTRIA_POLBEZ_20250101.shp"
+gdf_districts = gpd.read_file(gdf_districts_path)
 
 age_df['id'] = age_df['id'].astype(str)
 pop_change_df['id'] = pop_change_df['id'].astype(str)
 time_series_df['id'] = time_series_df['id'].astype(str)
 time_series_citizen_df['id'] = time_series_citizen_df['id'].astype(str)
 time_series_foreigner_df['id'] = time_series_foreigner_df['id'].astype(str)
-gdf['g_id'] = gdf['g_id'].astype(str)
+gdf_municipalities['g_id'] = gdf_municipalities['g_id'].astype(str)
+gdf_districts['g_id'] = gdf_districts['g_id'].astype(str)
 
-gdf.loc[gdf['g_id'].str.startswith('9'), 'g_id'] = gdf.loc[gdf['g_id'].str.startswith('9'), 'g_id'].str[:3]
+gdf_municipalities.loc[gdf_municipalities['g_id'].str.startswith('9'), 'g_id'] = gdf_municipalities.loc[gdf_municipalities['g_id'].str.startswith('9'), 'g_id'].str[:3]
 
 # MERGE EVERYTHING
 age_df = age_df.drop(columns=['total_population_2025'], errors='ignore')
@@ -246,6 +249,35 @@ merged = merged.merge(
     on='id',
     how='left'
 )
-merged = merged.merge(gdf, left_on='id', right_on='g_id', how='left')
+
+merged = merged.merge(
+    gdf_municipalities[['g_id', 'g_name', 'geometry']],
+    left_on='id',
+    right_on='g_id',
+    how='left'
+)
+
+merged = merged.merge(
+    gdf_districts[['g_id', 'g_name', 'geometry']],
+    left_on='id',
+    right_on='g_id',
+    how='left',
+    suffixes=('_mun', '_dist')
+)
+
+# Fill missing municipality data with district data
+merged['g_id'] = merged['g_id_mun'].fillna(merged['g_id_dist'])
+merged['g_name'] = merged['g_name_mun'].fillna(merged['g_name_dist'])
+merged['geometry'] = merged['geometry_mun'].fillna(merged['geometry_dist'])
+
+# Drop redundant columns
+cols_to_drop = [
+    'g_id_mun', 'g_id_dist',
+    'g_name_mun', 'g_name_dist',
+    'geometry_mun', 'geometry_dist'
+]
+
+merged = merged.drop(columns=cols_to_drop)
+merged = gpd.GeoDataFrame(merged, geometry='geometry')
 
 merged.to_csv("wrangled_data/merged_data.csv", sep=";", index=False, encoding="utf-8")
