@@ -51,7 +51,7 @@
     return decodeURIComponent(escape(str));
   }
 
-  function updateStyle(metric) {
+ function updateStyle(metric, allowZoom = true) {
     if (!geojsonData || !geojsonLayer) return;
 
     // Filter features based on selected Bundesland
@@ -62,19 +62,21 @@
     });
 
     // Zoom to selection
-    if (selectedGemeindeFeature) {
-      // Keep zoom on selected Gemeinde
-      const layer = geojsonLayer.getLayers().find(l => l.feature === selectedGemeindeFeature);
-      if (layer) {
-        const bounds = layer.getBounds ? layer.getBounds() : layer.getLatLng().toBounds(1000);
+    if (allowZoom) {
+      if (selectedGemeindeFeature) {
+        // Keep zoom on selected Gemeinde
+        const layer = geojsonLayer.getLayers().find(l => l.feature === selectedGemeindeFeature);
+        if (layer) {
+          const bounds = layer.getBounds ? layer.getBounds() : layer.getLatLng().toBounds(1000);
+          map.fitBounds(bounds, { padding: [20, 20] });
+        }
+      } else if (filteredFeatures.length > 0) {
+        // Default zoom to Bundesland or all features
+        const bounds = L.geoJSON(filteredFeatures).getBounds();
         map.fitBounds(bounds, { padding: [20, 20] });
+      } else {
+        map.setView([47.5, 14.5], 7);
       }
-    } else if (filteredFeatures.length > 0) {
-      // Default zoom to Bundesland or all features
-      const bounds = L.geoJSON(filteredFeatures).getBounds();
-      map.fitBounds(bounds, { padding: [20, 20] });
-    } else {
-      map.setView([47.5, 14.5], 7);
     }
 
     // Get values
@@ -443,6 +445,8 @@
   }
 
   function refreshGeojsonLayer() {
+    const view = getCurrentView();
+
     if (geojsonLayer) map.removeLayer(geojsonLayer);
 
     geojsonData = {
@@ -460,8 +464,10 @@
     circleById.clear();
     selectedGemeindeFeature = null;
 
-    updateStyle(currentMetric);
+    updateStyle(currentMetric, false);
     drawScatter();
+
+    restoreView(view);
   }
 
   function hoverFeatureOnMap(feature) {
@@ -552,7 +558,7 @@
 
   function toggleMetric(metric) {
     currentMetric = metric;
-    updateStyle(metric);
+    updateStyle(metric, false);
   }
 
   function selectBundesland(b) {
@@ -585,6 +591,40 @@
         ? isDistrict(id)
         : isMunicipality(id);
     });
+  }
+
+  function getCurrentView() {
+    return {
+      center: map.getCenter(),
+      zoom: map.getZoom()
+    };
+  }
+
+  function restoreView(view) {
+    map.setView(view.center, view.zoom, { animate: false });
+  }
+
+  function resetViewAndSelection() {
+    // Clear selections
+    selectedGemeindeFeature = null;
+    hoverId = null;
+
+    if (hoverLayer) {
+      map.removeLayer(hoverLayer);
+      hoverLayer = null;
+    }
+
+    // Reset UI state
+    selectedBundesland = "All";
+    searchQuery = "";
+    searchResults = [];
+
+    // Reset map view explicitly
+    map.setView([47.5, 14.5], 7, { animate: false });
+
+    // Update visuals WITHOUT auto-zoom
+    updateStyle(currentMetric, false);
+    drawScatter();
   }
 </script>
 
@@ -719,6 +759,12 @@
     class:active={adminLevel === "municipalities"}
     on:click={() => { adminLevel = "municipalities"; refreshGeojsonLayer(); }}>
     Municipalities
+  </button>
+</div>
+
+<div class="toggle-buttons">
+  <button on:click={resetViewAndSelection}>
+    Reset view
   </button>
 </div>
 
