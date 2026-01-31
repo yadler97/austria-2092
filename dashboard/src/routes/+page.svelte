@@ -18,7 +18,7 @@
   let searchResults = [];
   let selectedGemeindeFeature = null;
   let circleById = new Map();
-  let adminLevel = "districts";
+  let adminLevel = "municipalities";
   let fullGeojsonData;
   let hoverLayer;
   let hoverId = null
@@ -35,6 +35,18 @@
     "9": "Wien"
   };
 
+  const nuts2ToBundesland = {
+    AT11: "1",
+    AT12: "3",
+    AT13: "9",
+    AT21: "2",
+    AT22: "6",
+    AT31: "4",
+    AT32: "5",
+    AT33: "7",
+    AT34: "8"
+  };
+
   const metricLabels = {
     avg_age: "Average Age",
     population_change_per_1000: "Population Change Per 1000",
@@ -47,19 +59,11 @@
 
   let xScale, yScale;
 
-  function decodeUTF8(str) {
-    return decodeURIComponent(escape(str));
-  }
-
  function updateStyle(metric, allowZoom = true) {
     if (!geojsonData || !geojsonLayer) return;
 
     // Filter features based on selected Bundesland
-    const filteredFeatures = geojsonData.features.filter(f => {
-      const gId = f.properties?.g_id?.toString();
-      const bl = gId ? bundeslandMap[gId[0]] : null;
-      return selectedBundesland === "All" || bl === selectedBundesland;
-    });
+    const filteredFeatures = geojsonData.features.filter(isFeatureInBundesland);
 
     // Zoom to selection
     if (allowZoom) {
@@ -192,7 +196,7 @@
         } else {
           formatted = val.toFixed(1);
         }
-        layer.bindTooltip(`<b>${decodeUTF8(f.properties.g_name)}</b><br>${metricLabels[metric]}: ${formatted}`);
+        layer.bindTooltip(`<b>${f.properties.name}</b><br>${metricLabels[metric]}: ${formatted}`);
       } else {
         layer.unbindTooltip();
       }
@@ -200,9 +204,23 @@
   }
 
   function isFeatureInBundesland(f) {
-    if (!f.properties?.id) return false;
-    const gId = f.properties.id.toString();
-    const bl = bundeslandMap[gId[0]]; // first digit = Bundesland code
+    const id = f.properties?.id;
+    if (!id) return false;
+
+    let bl;
+
+    if (typeof id === "number" || /^\d+$/.test(id)) {
+      // numeric municipality / district ID
+      bl = bundeslandMap[id.toString()[0]];
+    } else if (typeof id === "string" && id.startsWith("AT")) {
+      if (isNuts2(id) || isNuts3(id)) {
+        // Take first 4 characters for both NUTS-2 and NUTS-3
+        const code = id.substring(0, 4);
+        const blKey = nuts2ToBundesland[code];
+        if (blKey) bl = bundeslandMap[blKey];
+      }
+    }
+
     return selectedBundesland === "All" || bl === selectedBundesland;
   }
 
@@ -218,13 +236,18 @@
     searchResults = geojsonData.features
       .filter(f => {
         const id = f.properties?.id;
-        const name = f.properties?.g_name?.toLowerCase() || "";
+        const name = f.properties?.name?.toLowerCase() || "";
 
         // Filter by name match
         if (!name.includes(q)) return false;
 
         // Filter by admin level
-        const levelOk = adminLevel === "districts" ? isDistrict(id) : isMunicipality(id);
+        const levelOk =
+          (adminLevel === "municipalities" && isMunicipality(id)) ||
+          (adminLevel === "districts" && isDistrict(id)) ||
+          (adminLevel === "nuts3" && isNuts3(id)) ||
+          (adminLevel === "nuts2" && isNuts2(id)) ||
+          (adminLevel === "nuts1" && isNuts1(id));
 
         // Filter by selected Bundesland
         const blOk = isFeatureInBundesland(f);
@@ -257,7 +280,13 @@
     // Filter features by selected Bundesland
     const filteredFeatures = geojsonData.features.filter(f =>
       isFeatureInBundesland(f) &&
-      (adminLevel === "districts" ? isDistrict(f.properties.id) : isMunicipality(f.properties.id))
+      (
+        (adminLevel === "municipalities" && isMunicipality(f.properties.id)) ||
+        (adminLevel === "districts" && isDistrict(f.properties.id)) ||
+        (adminLevel === "nuts3" && isNuts3(f.properties.id)) ||
+        (adminLevel === "nuts2" && isNuts2(f.properties.id)) ||
+        (adminLevel === "nuts1" && isNuts1(f.properties.id))
+      )
     );
 
     if (filteredFeatures.length === 0) return;
@@ -457,7 +486,7 @@
     geojsonLayer = L.geoJSON(geojsonData, {
       style: f => ({ fillColor: "#fff", weight: 1, color: "white", fillOpacity: 0.8 }),
       onEachFeature: (f, layer) => {
-        layer.bindTooltip(`<b>${f.properties.g_name}</b><br>${f.properties[currentMetric]}`);
+        layer.bindTooltip(`<b>${f.properties.name}</b><br>${f.properties[currentMetric]}`);
       }
     }).addTo(map);
 
@@ -522,7 +551,7 @@
     fullGeojsonData = JSON.parse(geojsonText);
 
     fullGeojsonData.features.forEach(f => {
-      if (f.properties?.g_name) f.properties.g_name = f.properties.g_name.normalize("NFC");
+      if (f.properties?.name) f.properties.name = f.properties.name.normalize("NFC");
     });
 
     geojsonData = {
@@ -534,7 +563,7 @@
     geojsonLayer = L.geoJSON(geojsonData, {
       style: f => ({ fillColor: "#fff", weight: 1, color: "white", fillOpacity: 0.8 }),
       onEachFeature: (f, layer) => {
-        layer.bindTooltip(`<b>${f.properties.g_name}</b><br>${f.properties[currentMetric]}`);
+        layer.bindTooltip(`<b>${f.properties.name}</b><br>${f.properties[currentMetric]}`);
       }
     }).addTo(map);
 
@@ -572,6 +601,18 @@
     if (searchInput) searchInput.select();
   }
 
+  function isNuts1(id) {
+    return typeof id === "string" && /^AT[0-9]$/.test(id);
+  }
+
+  function isNuts2(id) {
+    return typeof id === "string" && /^AT[0-9]{2}$/.test(id);
+  }
+
+  function isNuts3(id) {
+    return typeof id === "string" && /^AT[0-9]{3}$/.test(id);
+  }
+
   function isDistrict(id) {
     if (!id) return false;
     const s = id.toString();
@@ -587,9 +628,21 @@
   function filterFeaturesByLevel(features) {
     return features.filter(f => {
       const id = f.properties?.id;
-      return adminLevel === "districts"
-        ? isDistrict(id)
-        : isMunicipality(id);
+
+      switch (adminLevel) {
+        case "municipalities":
+          return isMunicipality(id);
+        case "districts":
+          return isDistrict(id);
+        case "nuts3":
+          return isNuts3(id);
+        case "nuts2":
+          return isNuts2(id);
+        case "nuts1":
+          return isNuts1(id);
+        default:
+          return false;
+      }
     });
   }
 
@@ -749,16 +802,30 @@
 
 <div class="toggle-buttons">
   <span>Admin level:</span>
-  <button
-    class:active={adminLevel === "districts"}
+
+  <button class:active={adminLevel === "municipalities"}
+    on:click={() => { adminLevel = "municipalities"; refreshGeojsonLayer(); }}>
+    Municipalities
+  </button>
+
+  <button class:active={adminLevel === "districts"}
     on:click={() => { adminLevel = "districts"; refreshGeojsonLayer(); }}>
     Districts
   </button>
 
-  <button
-    class:active={adminLevel === "municipalities"}
-    on:click={() => { adminLevel = "municipalities"; refreshGeojsonLayer(); }}>
-    Municipalities
+  <button class:active={adminLevel === "nuts3"}
+    on:click={() => { adminLevel = "nuts3"; refreshGeojsonLayer(); }}>
+    NUTS-3
+  </button>
+
+  <button class:active={adminLevel === "nuts2"}
+    on:click={() => { adminLevel = "nuts2"; refreshGeojsonLayer(); }}>
+    NUTS-2
+  </button>
+
+  <button class:active={adminLevel === "nuts1"}
+    on:click={() => { adminLevel = "nuts1"; refreshGeojsonLayer(); }}>
+    NUTS-1
   </button>
 </div>
 

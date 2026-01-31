@@ -217,6 +217,15 @@ gdf_municipalities = gpd.read_file(gdf_municipalities_path)
 gdf_districts_path = "data/OGDEXT_POLBEZ_1_STATISTIK_AUSTRIA_20250101/STATISTIK_AUSTRIA_POLBEZ_20250101.shp"
 gdf_districts = gpd.read_file(gdf_districts_path)
 
+gdf_nuts_3_path = "data/OGDEXT_NUTS_1_STATISTIK_AUSTRIA_NUTS3_20250101/STATISTIK_AUSTRIA_NUTS3_20250101.shp"
+gdf_nuts_3 = gpd.read_file(gdf_nuts_3_path)
+
+gdf_nuts_2_path = "data/OGDEXT_NUTS_1_STATISTIK_AUSTRIA_NUTS2_20160101/STATISTIK_AUSTRIA_NUTS2_20160101.shp"
+gdf_nuts_2 = gpd.read_file(gdf_nuts_2_path)
+
+gdf_nuts_1_path = "data/OGDEXT_NUTS_1_STATISTIK_AUSTRIA_NUTS1_20160101/STATISTIK_AUSTRIA_NUTS1_20160101.shp"
+gdf_nuts_1 = gpd.read_file(gdf_nuts_1_path)
+
 age_df['id'] = age_df['id'].astype(str)
 pop_change_df['id'] = pop_change_df['id'].astype(str)
 time_series_df['id'] = time_series_df['id'].astype(str)
@@ -251,33 +260,67 @@ merged = merged.merge(
 )
 
 merged = merged.merge(
-    gdf_municipalities[['g_id', 'g_name', 'geometry']],
+    gdf_municipalities[['g_id', 'geometry']],
     left_on='id',
     right_on='g_id',
     how='left'
 )
 
 merged = merged.merge(
-    gdf_districts[['g_id', 'g_name', 'geometry']],
+    gdf_districts[['g_id', 'geometry']],
     left_on='id',
     right_on='g_id',
     how='left',
-    suffixes=('_mun', '_dist')
+    suffixes=('', '_dist')
 )
 
-# Fill missing municipality data with district data
-merged['g_id'] = merged['g_id_mun'].fillna(merged['g_id_dist'])
-merged['g_name'] = merged['g_name_mun'].fillna(merged['g_name_dist'])
-merged['geometry'] = merged['geometry_mun'].fillna(merged['geometry_dist'])
+merged = merged.merge(
+    gdf_nuts_3[['g_id', 'geometry']],
+    left_on='id',
+    right_on='g_id',
+    how='left',
+    suffixes=('', '_nuts3')
+)
+
+merged = merged.merge(
+    gdf_nuts_2[['ID', 'geometry']],
+    left_on='id',
+    right_on='ID',
+    how='left',
+    suffixes=('', '_nuts2')
+)
+
+merged = merged.merge(
+    gdf_nuts_1[['ID', 'geometry']],
+    left_on='id',
+    right_on='ID',
+    how='left',
+    suffixes=('', '_nuts1')
+)
+
+merged['geometry'] = (
+    merged['geometry']
+    .fillna(merged['geometry_dist'])
+    .fillna(merged['geometry_nuts3'])
+    .fillna(merged['geometry_nuts2'])
+    .fillna(merged['geometry_nuts1'])
+)
+
+merged['g_id'] = (
+    merged['g_id']
+    .fillna(merged['g_id_dist'])
+    .fillna(merged['g_id_nuts3'])
+    .fillna(merged['ID'])
+    .fillna(merged['ID_nuts1'])
+)
 
 # Drop redundant columns
 cols_to_drop = [
-    'g_id_mun', 'g_id_dist',
-    'g_name_mun', 'g_name_dist',
-    'geometry_mun', 'geometry_dist'
+    'geometry_dist', 'geometry_nuts3', 'geometry_nuts2', 'geometry_nuts1',
+    'g_id_dist', 'g_id_nuts3', 'ID', 'ID_nuts1'
 ]
 
-merged = merged.drop(columns=cols_to_drop)
-merged = gpd.GeoDataFrame(merged, geometry='geometry')
+merged = merged.drop(columns=[c for c in cols_to_drop if c in merged.columns])
+merged = gpd.GeoDataFrame(merged, geometry='geometry', crs=gdf_municipalities.crs)
 
 merged.to_csv("wrangled_data/merged_data.csv", sep=";", index=False, encoding="utf-8")
